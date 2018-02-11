@@ -97,10 +97,10 @@ import Config
 
 import Graphics.Wayland.WlRoots.Util
 
-setupTrackball :: Ptr InputDevice -> IO ()
-setupTrackball dev = doJust (getDeviceHandle dev) $ \handle -> do
+setupTouchpad :: Ptr InputDevice -> IO ()
+setupTouchpad dev = doJust (getDeviceHandle dev) $ \handle -> do
     name <- getDeviceName dev
-    when ("ETPS2 Elantech Touchpad" `T.isPrefixOf` name) $ do
+    when ("ETPS/2 Elantech Touchpad" `T.isPrefixOf` name) $ do
         void $ LI.setTapEnabled handle LI.TapEnabled
         void $ LI.setMiddleEmulationEnabled handle LI.MiddleEmulationEnabled
 
@@ -160,6 +160,7 @@ bindings modi =
     , (([modi], keysym_Return), spawn "urxvt")
     , (([modi], keysym_d), spawn "rofi -show run")
     , (([modi], keysym_w), spawn "vwatch")
+    , (([modi], keysym_x), spawn "physlock")
     , (([modi], keysym_t), spawn "mpc toggle")
     , (([modi, Shift], keysym_Left), spawn "mpc prev")
     , (([modi, Shift], keysym_Right), spawn "mpc next")
@@ -184,7 +185,7 @@ myConf modi = WayUserConf
     , wayUserConfKeybinds    = bindings modi
 
     , wayUserConfInputAdd    = \ptr -> do
-        liftIO $ setupTrackball ptr
+        liftIO $ setupTouchpad ptr
         attachDevice ptr "seat0"
     , wayUserConfDisplayHook =
         [ getFuseBracket

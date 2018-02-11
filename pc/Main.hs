@@ -158,7 +158,7 @@ bindings modi =
     , (([modi], keysym_Right), sendMessage $ IncreaseRatio 0.1)
 
     , (([modi], keysym_Return), spawn "alacritty")
-    , (([modi], keysym_d), spawn "dmenu_run")
+    , (([modi], keysym_d), spawn "rofi -show run")
     , (([modi], keysym_w), spawn "vwatch")
     , (([modi], keysym_t), spawn "mpc toggle")
     , (([modi, Shift], keysym_Left), spawn "mpc prev")
