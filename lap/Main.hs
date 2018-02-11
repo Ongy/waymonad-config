@@ -40,10 +40,15 @@ import Text.XkbCommon.KeysymList
 import Graphics.Wayland.WlRoots.Backend.Libinput (getDeviceHandle)
 import Graphics.Wayland.WlRoots.Input (InputDevice, getDeviceName)
 import Graphics.Wayland.WlRoots.Input.Keyboard (WlrModifier(..))
+import Graphics.Wayland.WlRoots.Output (outputEnable, outputDisable)
 import Graphics.Wayland.WlRoots.Render.Color (Color (..))
 
 import Data.String (IsString)
 import Fuse.Main
+import Waymonad (Way, KeyBinding, getEvent)
+import Waymonad.Actions.Spawn (spawn, manageSpawnOn)
+import Waymonad.Actions.Startup.Environment
+import Waymonad.Actions.Startup.Generic
 import Waymonad.GlobalFilter
 import Waymonad.Hooks.EnterLeave (enterLeaveHook)
 import Waymonad.Hooks.FocusFollowPointer
@@ -52,33 +57,30 @@ import Waymonad.Hooks.ScaleHook
 import Waymonad.IdleManager
 import Waymonad.Input (attachDevice)
 import Waymonad.Input.Keyboard (setSubMap, resetSubMap, getSubMap)
-import Waymonad.Layout.SmartBorders
+import Waymonad.Layout.AvoidStruts
 import Waymonad.Layout.Choose
 import Waymonad.Layout.Mirror (mkMirror, ToggleMirror (..))
+import Waymonad.Layout.Ratio
+import Waymonad.Layout.SmartBorders
 import Waymonad.Layout.Spiral
-import Waymonad.Layout.AvoidStruts
 import Waymonad.Layout.Tall (Tall (..))
 import Waymonad.Layout.ToggleFull (mkTFull, ToggleFullM (..))
 import Waymonad.Layout.TwoPane (TwoPane (..))
-import Waymonad.Layout.Ratio
 import Waymonad.Navigation2D
 import Waymonad.Output (Output (outputRoots), addOutputToWork, setPreferdMode)
 import Waymonad.Protocols.GammaControl
 import Waymonad.Protocols.Screenshooter
-import Waymonad.Actions.Startup.Environment
-import Waymonad.Actions.Startup.Generic
-import Waymonad.Utility.Base (doJust)
-import Waymonad.Actions.Spawn (spawn, manageSpawnOn)
 import Waymonad.Shells.Pseudo.Proxy (makeProxy)
-import Waymonad.ViewSet (WSTag, Layouted, FocusCore, ListLike (..))
+import Waymonad.Types (SomeEvent, WayHooks (..), BindingMap)
 import Waymonad.Utility (sendMessage, focusNextOut, sendTo, closeCurrent, closeCompositor)
+import Waymonad.Utility.Base (doJust)
 import Waymonad.Utility.Current (getCurrentView)
 import Waymonad.Utility.Floating (centerFloat)
+import Waymonad.Utility.Mapping (getOutputs)
 import Waymonad.Utility.Timing
 import Waymonad.Utility.View
 import Waymonad.Utility.ViewSet (modifyFocusedWS)
-import Waymonad (Way, KeyBinding)
-import Waymonad.Types (SomeEvent, WayHooks (..), BindingMap)
+import Waymonad.ViewSet (WSTag, Layouted, FocusCore, ListLike (..))
 import Waymonad.ViewSet.XMonad (ViewSet, sameLayout)
 
 import qualified Data.Map as M
@@ -174,7 +176,14 @@ bindings modi =
     ] ++ concatMap (\(sym, ws) -> [(([modi], sym), greedyView ws), (([modi, Shift], sym), sendTo ws), (([modi, Ctrl], sym), copyView ws)]) (zip wsSyms workspaces)
 
 myEventHook :: (FocusCore vs a, WSTag a) => SomeEvent -> Way vs a ()
-myEventHook = idleLog
+myEventHook event = case getEvent event of
+    Just IdleStart -> do
+        outs <- getOutputs
+        liftIO $ mapM_ (outputDisable . outputRoots) outs
+    Just IdleStop -> do
+        outs <- getOutputs
+        liftIO $ mapM_ (outputEnable . outputRoots) outs
+    Nothing -> pure ()
 
 myConf :: WlrModifier -> WayUserConf (ViewSet Text) Text
 myConf modi = WayUserConf
