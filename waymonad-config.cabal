@@ -1,0 +1,20 @@
+name:                waymonad-config
+version:             0.0.1.0
+cabal-version:       >=1.10
+build-type:          Simple
+
+executable waymonad-pc
+  -- .hs or .lhs file containing the Main module.
+  main-is:             Main.hs
+  default-language:    Haskell2010
+  ghc-options:         -Wall -with-rtsopts=-V0 -g -O0 -rtsopts
+  hs-source-dirs:      pc
+  build-depends:       base >=4.6.0.1 && <5, waymonad, hayland, text, libinput, xkbcommon, hsroots, containers
+
+executable waymonad-lap
+  -- .hs or .lhs file containing the Main module.
+  main-is:             Main.hs
+  default-language:    Haskell2010
+  ghc-options:         -Wall -with-rtsopts=-V0 -g -O0 -rtsopts
+  hs-source-dirs:      lap
+  build-depends:       base >=4.6.0.1 && <5, waymonad, hayland, text, libinput, xkbcommon, hsroots, containers
