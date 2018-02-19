@@ -1,3 +1,12 @@
 packages: ./ waymonad waymonad/hsroots waymonad/hsroots/haskell-wayland waymonad/hsroots/haskell-xkbcommon waymonad/hsroots/libinput waymonad/hfuse
-documentation: True
-haddock-all: True
+-- documentation: True
+-- haddock-all: True
+
+package hsroots
+  ghc-options: -O2
+
+package waymonad
+  ghc-options: -O2
+
+package libinput
+  ghc-options: -O2

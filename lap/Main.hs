@@ -33,7 +33,7 @@ import Data.Monoid ((<>))
 import Data.Text (Text)
 import Foreign.Ptr (Ptr)
 import System.IO
-import System.Environment (lookupEnv)
+import System.Environment (lookupEnv, setEnv)
 
 import Text.XkbCommon.InternalTypes (Keysym(..))
 import Text.XkbCommon.KeysymList
@@ -45,7 +45,7 @@ import Graphics.Wayland.WlRoots.Render.Color (Color (..))
 
 import Data.String (IsString)
 import Fuse.Main
-import Waymonad (Way, KeyBinding, getEvent)
+import Waymonad (Way, KeyBinding, getSeat, getEvent)
 import Waymonad.Actions.Spawn (spawn, manageSpawnOn)
 import Waymonad.Actions.Startup.Environment
 import Waymonad.Actions.Startup.Generic
@@ -56,6 +56,7 @@ import Waymonad.Hooks.KeyboardFocus
 import Waymonad.Hooks.ScaleHook
 import Waymonad.IdleManager
 import Waymonad.Input (attachDevice)
+import Waymonad.Input.Seat (useClipboardText)
 import Waymonad.Input.Keyboard (setSubMap, resetSubMap, getSubMap)
 import Waymonad.Layout.AvoidStruts
 import Waymonad.Layout.Choose
@@ -68,9 +69,10 @@ import Waymonad.Layout.ToggleFull (mkTFull, ToggleFullM (..))
 import Waymonad.Layout.TwoPane (TwoPane (..))
 import Waymonad.Navigation2D
 import Waymonad.Output (Output (outputRoots), addOutputToWork, setPreferdMode)
+import Waymonad.Output.Background (loadLogoBackground)
 import Waymonad.Protocols.GammaControl
 import Waymonad.Protocols.Screenshooter
-import Waymonad.Shells.Pseudo.Proxy (makeProxy)
+import Waymonad.Start (Bracketed (..))
 import Waymonad.Types (SomeEvent, WayHooks (..), BindingMap)
 import Waymonad.Utility (sendMessage, focusNextOut, sendTo, closeCurrent, closeCompositor)
 import Waymonad.Utility.Base (doJust)
@@ -143,6 +145,10 @@ getModi = do
     x11 <- lookupEnv "DISPLAY"
     pure . maybe Logo (const Alt) $ way <|> x11
 
+spawnVWatch :: Way vs ws ()
+spawnVWatch = doJust getSeat $ \seat ->
+    useClipboardText seat (spawn . (++) "vwatch " . T.unpack)
+
 bindings :: (Layouted vs ws, ListLike vs ws, FocusCore vs ws, IsString ws, WSTag ws)
          => WlrModifier -> [(([WlrModifier], Keysym), KeyBinding vs ws)]
 bindings modi =
@@ -167,10 +173,12 @@ bindings modi =
     , (([modi, Shift], keysym_Left), spawn "mpc prev")
     , (([modi, Shift], keysym_Right), spawn "mpc next")
 
+    , (([], keysym_XF86MonBrightnessUp), spawn "brightnessctl set +5%")
+    , (([], keysym_XF86MonBrightnessDown), spawn "brightnessctl set 5-%")
+
     , (([modi], keysym_n), focusNextOut)
     , (([modi], keysym_q), closeCurrent)
     , (([modi], keysym_o), centerFloat)
-    , (([modi], keysym_c), doJust getCurrentView makeProxy)
     , (([modi], keysym_a), doJust getCurrentView Multi.copyView)
     , (([modi, Shift], keysym_e), closeCompositor)
     ] ++ concatMap (\(sym, ws) -> [(([modi], sym), greedyView ws), (([modi, Shift], sym), sendTo ws), (([modi, Ctrl], sym), copyView ws)]) (zip wsSyms workspaces)
@@ -202,7 +210,9 @@ myConf modi = WayUserConf
         , getFilterBracket filterUser
         , baseTimeBracket
         , getStartupBracket (spawn "redshift -m wayland")
-        , envBracket [ ("QT_QPA_PLATFORM", "wayland-egl")
+        , envBracket [ ("MPD_SERVER", "link.ongy")
+                     , ("QT_QPA_PLATFORM", "wayland-egl")
+                     , ("QT_WAYLAND_DISABLE_WINDOWDECORATION", "1")
                      -- breaks firefox (on arch) :/
                      --, ("GDK_BACKEND", "wayland")
                      , ("SDL_VIDEODRIVER", "wayland")
@@ -210,7 +220,7 @@ myConf modi = WayUserConf
                      ]
         ]
     , wayUserConfBackendHook = [getIdleBracket 3e5]
-    , wayUserConfPostHook    = [getScreenshooterBracket]
+    , wayUserConfPostHook    = [getScreenshooterBracket, Bracketed (const $ loadLogoBackground) (const $ pure ())]
     , wayUserConfCoreHooks   = WayHooks
         { wayHooksVWSChange       = wsScaleHook <> (liftIO . hPrint stderr)
         , wayHooksOutputMapping   = enterLeaveHook <> handlePointerSwitch <> SM.mappingChangeEvt <> constStrutHandler [("LVDS-1", Struts 20 0 0 0)] <> (liftIO . hPrint stderr)
@@ -222,15 +232,19 @@ myConf modi = WayUserConf
     , wayUserConfShells = [Xdg.makeShell, Wl.makeShell, XWay.makeShellAct (spawn "monky | dzen2")]
     , wayUserConfLog = pure ()
     , wayUserConfOutputAdd = \out -> do
-        setPreferdMode (outputRoots out)
-        addOutputToWork out Nothing
+        setPreferdMode (outputRoots out) $
+            addOutputToWork out Nothing
     , wayUserconfLoggers = Nothing
     , wayUserconfColor = Color 0.5 0 0 1
     , wayUserconfColors = mempty
+    , wayUserconfFramerHandler = Nothing
     }
 
 main :: IO ()
 main = do
+    setEnv "XKB_DEFAULT_LAYOUT" "us,de"
+    setEnv "XKB_DEFAULT_VARIANT" ",nodeadkeys"
+    setEnv "XKB_DEFAULT_OPTIONS" "grp:alt_space_toggle,caps:escape"
     setLogPrio Debug
     modi <- getModi
     confE <- loadConfig

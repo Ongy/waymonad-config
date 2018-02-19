@@ -33,7 +33,7 @@ import Data.Monoid ((<>))
 import Data.Text (Text)
 import Foreign.Ptr (Ptr)
 import System.IO
-import System.Environment (lookupEnv)
+import System.Environment (lookupEnv, setEnv)
 
 import Text.XkbCommon.InternalTypes (Keysym(..))
 import Text.XkbCommon.KeysymList
@@ -44,6 +44,11 @@ import Graphics.Wayland.WlRoots.Render.Color (Color (..))
 
 import Data.String (IsString)
 import Fuse.Main
+import Waymonad (Way, KeyBinding, getSeat)
+import Waymonad.Actions.Spawn (spawn, manageSpawnOn, spawnOn)
+import Waymonad.Actions.Spawn.X11 (spawnX11On, manageX11SpawnOn)
+import Waymonad.Actions.Startup.Environment
+import Waymonad.Actions.Startup.Generic
 import Waymonad.GlobalFilter
 import Waymonad.Hooks.EnterLeave (enterLeaveHook)
 import Waymonad.Hooks.FocusFollowPointer
@@ -51,34 +56,32 @@ import Waymonad.Hooks.KeyboardFocus
 import Waymonad.Hooks.ScaleHook
 import Waymonad.IdleManager
 import Waymonad.Input (attachDevice)
+import Waymonad.Input.Seat (useClipboardText)
 import Waymonad.Input.Keyboard (setSubMap, resetSubMap, getSubMap)
-import Waymonad.Layout.SmartBorders
+import Waymonad.Layout.AvoidStruts
 import Waymonad.Layout.Choose
 import Waymonad.Layout.Mirror (mkMirror, ToggleMirror (..))
+import Waymonad.Layout.Ratio
+import Waymonad.Layout.SmartBorders
 import Waymonad.Layout.Spiral
-import Waymonad.Layout.AvoidStruts
 import Waymonad.Layout.Tall (Tall (..))
 import Waymonad.Layout.ToggleFull (mkTFull, ToggleFullM (..))
 import Waymonad.Layout.TwoPane (TwoPane (..))
-import Waymonad.Layout.Ratio
 import Waymonad.Navigation2D
 import Waymonad.Output (Output (outputRoots), addOutputToWork, setPreferdMode)
+import Waymonad.Output.Background (loadLogoBackground)
 import Waymonad.Protocols.GammaControl
 import Waymonad.Protocols.Screenshooter
-import Waymonad.Actions.Startup.Environment
-import Waymonad.Actions.Startup.Generic
-import Waymonad.Utility.Base (doJust)
-import Waymonad.Actions.Spawn (spawn, manageSpawnOn)
-import Waymonad.Shells.Pseudo.Proxy (makeProxy)
-import Waymonad.ViewSet (WSTag, Layouted, FocusCore, ListLike (..))
+import Waymonad.Start (Bracketed (..))
+import Waymonad.Types (SomeEvent, WayHooks (..), BindingMap)
 import Waymonad.Utility (sendMessage, focusNextOut, sendTo, closeCurrent, closeCompositor)
+import Waymonad.Utility.Base (doJust)
 import Waymonad.Utility.Current (getCurrentView)
 import Waymonad.Utility.Floating (centerFloat)
 import Waymonad.Utility.Timing
 import Waymonad.Utility.View
 import Waymonad.Utility.ViewSet (modifyFocusedWS)
-import Waymonad (Way, KeyBinding)
-import Waymonad.Types (SomeEvent, WayHooks (..), BindingMap)
+import Waymonad.ViewSet (WSTag, Layouted, FocusCore, ListLike (..))
 import Waymonad.ViewSet.XMonad (ViewSet, sameLayout)
 
 import qualified Data.Map as M
@@ -102,7 +105,7 @@ setupTrackball dev = doJust (getDeviceHandle dev) $ \handle -> do
     name <- getDeviceName dev
     when ("Logitech USB Trackball" `T.isPrefixOf` name) $ do
         void $ LI.setScrollMethod handle LI.ScrollOnButtonDown
-        void $ LI.setScrollButton handle 0x116
+        void $ LI.setScrollButton handle 0x113
 
 wsSyms :: [Keysym]
 wsSyms =
@@ -141,6 +144,10 @@ getModi = do
     x11 <- lookupEnv "DISPLAY"
     pure . maybe Logo (const Alt) $ way <|> x11
 
+spawnVWatch :: Way vs ws ()
+spawnVWatch = doJust getSeat $ \seat ->
+    useClipboardText seat (spawn . (++) "vwatch " . T.unpack)
+
 bindings :: (Layouted vs ws, ListLike vs ws, FocusCore vs ws, IsString ws, WSTag ws)
          => WlrModifier -> [(([WlrModifier], Keysym), KeyBinding vs ws)]
 bindings modi =
@@ -159,7 +166,7 @@ bindings modi =
 
     , (([modi], keysym_Return), spawn "alacritty")
     , (([modi], keysym_d), spawn "rofi -show run")
-    , (([modi], keysym_w), spawn "vwatch")
+    , (([modi], keysym_w), spawnVWatch)
     , (([modi], keysym_t), spawn "mpc toggle")
     , (([modi, Shift], keysym_Left), spawn "mpc prev")
     , (([modi, Shift], keysym_Right), spawn "mpc next")
@@ -167,7 +174,6 @@ bindings modi =
     , (([modi], keysym_n), focusNextOut)
     , (([modi], keysym_q), closeCurrent)
     , (([modi], keysym_o), centerFloat)
-    , (([modi], keysym_c), doJust getCurrentView makeProxy)
     , (([modi], keysym_a), doJust getCurrentView Multi.copyView)
     , (([modi, Shift], keysym_e), closeCompositor)
     ] ++ concatMap (\(sym, ws) -> [(([modi], sym), greedyView ws), (([modi, Shift], sym), sendTo ws), (([modi, Ctrl], sym), copyView ws)]) (zip wsSyms workspaces)
@@ -175,11 +181,18 @@ bindings modi =
 myEventHook :: (FocusCore vs a, WSTag a) => SomeEvent -> Way vs a ()
 myEventHook = idleLog
 
+xReady :: Way vs Text ()
+xReady = do
+    spawn "monky | dzen2 -x 1280 -w 1280"
+    spawnOn "1" "qutebrowser" []
+    spawnOn "2" "alacritty" ["-e", "glirc2"]
+    spawnX11On "4" "firefox" []
+
 myConf :: WlrModifier -> WayUserConf (ViewSet Text) Text
 myConf modi = WayUserConf
     { wayUserConfWorkspaces  = workspaces
     , wayUserConfLayouts     = sameLayout . avoidStruts . mkSmartBorders 2 . mkMirror . mkTFull $ (Tall 0.5 ||| TwoPane 0.5 ||| Spiral 0.618)
-    , wayUserConfManagehook  = XWay.overrideXRedirect <> manageSpawnOn
+    , wayUserConfManagehook  = XWay.overrideXRedirect <> manageSpawnOn <> manageX11SpawnOn
     , wayUserConfEventHook   = myEventHook
     , wayUserConfKeybinds    = bindings modi
 
@@ -194,6 +207,7 @@ myConf modi = WayUserConf
         , getStartupBracket (spawn "redshift -m wayland")
         , envBracket [ ("PULSE_SERVER", "zelda.ongy")
                      , ("QT_QPA_PLATFORM", "wayland-egl")
+                     , ("QT_WAYLAND_DISABLE_WINDOWDECORATION", "1")
                      -- breaks firefox (on arch) :/
                      --, ("GDK_BACKEND", "wayland")
                      , ("SDL_VIDEODRIVER", "wayland")
@@ -201,7 +215,7 @@ myConf modi = WayUserConf
                      ]
         ]
     , wayUserConfBackendHook = [getIdleBracket 3e5]
-    , wayUserConfPostHook    = [getScreenshooterBracket]
+    , wayUserConfPostHook    = [getScreenshooterBracket, Bracketed (const $ loadLogoBackground) (const $ pure ())]
     , wayUserConfCoreHooks   = WayHooks
         { wayHooksVWSChange       = wsScaleHook <> (liftIO . hPrint stderr)
         , wayHooksOutputMapping   = enterLeaveHook <> handlePointerSwitch <> SM.mappingChangeEvt <> constStrutHandler [("DVI-D-1", Struts 20 0 0 0)] <> (liftIO . hPrint stderr)
@@ -210,18 +224,22 @@ myConf modi = WayUserConf
         , wayHooksSeatFocusChange = focusFollowPointer <> (liftIO . hPrint stderr)
         , wayHooksNewOutput       = H.outputAddHook
         }
-    , wayUserConfShells = [Xdg.makeShell, Wl.makeShell, XWay.makeShellAct (spawn "monky | dzen2 -x 1280 -w 1280")]
+    , wayUserConfShells = [Xdg.makeShell, Wl.makeShell, XWay.makeShellAct xReady]
     , wayUserConfLog = pure ()
     , wayUserConfOutputAdd = \out -> do
-        setPreferdMode (outputRoots out)
-        addOutputToWork out Nothing
+        setPreferdMode (outputRoots out) $
+            addOutputToWork out Nothing
     , wayUserconfLoggers = Nothing
     , wayUserconfColor = Color 0.5 0 0 1
     , wayUserconfColors = mempty
+    , wayUserconfFramerHandler = Nothing
     }
 
 main :: IO ()
 main = do
+    setEnv "XKB_DEFAULT_LAYOUT" "us,de"
+    setEnv "XKB_DEFAULT_VARIANT" ",nodeadkeys"
+    setEnv "XKB_DEFAULT_OPTIONS" "grp:alt_space_toggle,caps:escape"
     setLogPrio Debug
     modi <- getModi
     confE <- loadConfig
