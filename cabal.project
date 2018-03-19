@@ -1,4 +1,4 @@
-packages: ./ waymonad waymonad/hsroots waymonad/hsroots/haskell-wayland waymonad/hsroots/haskell-xkbcommon waymonad/hsroots/libinput waymonad/hfuse
+packages: ./ waymonad waymonad/hsroots waymonad/hsroots/haskell-wayland waymonad/hsroots/haskell-xkbcommon waymonad/hsroots/libinput waymonad/hfuse waymonad/waymonad-scanner
 -- documentation: True
 -- haddock-all: True
 

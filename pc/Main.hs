@@ -23,12 +23,14 @@ Reach us at https://github.com/ongy/waymonad
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE NumDecimals #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE PackageImports #-}
 module Main
 where
 
 import Control.Applicative ((<|>))
 import Control.Monad (when, void)
 import Control.Monad.IO.Class (liftIO)
+import Data.IORef (readIORef)
 import Data.Monoid ((<>))
 import Data.Text (Text)
 import Foreign.Ptr (Ptr)
@@ -54,10 +56,12 @@ import Waymonad.Hooks.EnterLeave (enterLeaveHook)
 import Waymonad.Hooks.FocusFollowPointer
 import Waymonad.Hooks.KeyboardFocus
 import Waymonad.Hooks.ScaleHook
+import Waymonad.IPC
+import Waymonad.IdleDPMS
 import Waymonad.IdleManager
 import Waymonad.Input (attachDevice)
-import Waymonad.Input.Seat (useClipboardText)
-import Waymonad.Input.Keyboard (setSubMap, resetSubMap, getSubMap)
+import Waymonad.Input.Cursor.Bindings (makeDefaultMappings)
+import Waymonad.Input.Seat (useClipboardText, setSeatKeybinds, resetSeatKeymap)
 import Waymonad.Layout.AvoidStruts
 import Waymonad.Layout.Choose
 import Waymonad.Layout.Mirror (mkMirror, ToggleMirror (..))
@@ -69,11 +73,13 @@ import Waymonad.Layout.ToggleFull (mkTFull, ToggleFullM (..))
 import Waymonad.Layout.TwoPane (TwoPane (..))
 import Waymonad.Navigation2D
 import Waymonad.Output (Output (outputRoots), addOutputToWork, setPreferdMode)
-import Waymonad.Output.Background (loadLogoBackground)
 import Waymonad.Protocols.GammaControl
+import Waymonad.Protocols.IdleInhibit
 import Waymonad.Protocols.Screenshooter
+import Waymonad.Protocols.Background
 import Waymonad.Start (Bracketed (..))
 import Waymonad.Types (SomeEvent, WayHooks (..), BindingMap)
+import Waymonad.Types.Core (Seat (seatKeymap), WayKeyState (..), keystateAsInt)
 import Waymonad.Utility (sendMessage, focusNextOut, sendTo, closeCurrent, closeCompositor)
 import Waymonad.Utility.Base (doJust)
 import Waymonad.Utility.Current (getCurrentView)
@@ -84,19 +90,20 @@ import Waymonad.Utility.ViewSet (modifyFocusedWS)
 import Waymonad.ViewSet (WSTag, Layouted, FocusCore, ListLike (..))
 import Waymonad.ViewSet.XMonad (ViewSet, sameLayout)
 
-import qualified Data.Map as M
+import qualified Data.IntMap.Strict as IM
 
 import qualified Waymonad.Hooks.OutputAdd as H
 import qualified Waymonad.Hooks.SeatMapping as SM
 import qualified Waymonad.Shells.XWayland as XWay
 import qualified Waymonad.Shells.XdgShell as Xdg
+import qualified Waymonad.Shells.XdgShellv6 as Xdgv6
 import qualified Waymonad.Shells.WlShell as Wl
 import qualified System.InputDevice as LI
 import qualified Waymonad.Shells.Pseudo.Multi as Multi
 import qualified Data.Text as T
 
 import Waymonad.Main
-import Config
+import "waymonad" Config
 
 import Graphics.Wayland.WlRoots.Util
 
@@ -125,17 +132,21 @@ wsSyms =
 workspaces :: IsString a => [a]
 workspaces = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "video"]
 
+
 makeListNavigation :: (ListLike vs ws, FocusCore vs ws, WSTag ws)
-                   => WlrModifier -> Way vs ws (BindingMap vs ws)
-makeListNavigation modi = do
-    let listNav = makeBindingMap
+                   => Seat -> WlrModifier -> Way vs ws (WayKeyState -> Way vs ws Bool)
+makeListNavigation seat modi = do
+    current <- liftIO . readIORef $ seatKeymap seat
+    let newMap = makeBindingMap
             [ (([modi], keysym_j), modifyFocusedWS $ flip _moveFocusRight)
             , (([modi], keysym_k), modifyFocusedWS $ flip _moveFocusLeft )
-            , (([], keysym_Escape), resetSubMap)
+            , (([modi, Shift], keysym_h), resetSeatKeymap seat)
+            , (([], keysym_Escape), resetSeatKeymap seat)
             ]
-    current <- getSubMap
-    pure (M.union listNav current)
 
+    pure $ \keystate -> case IM.lookup (keystateAsInt keystate) newMap of
+        Nothing -> liftIO $ current keystate
+        Just act -> act >> pure True
 
 -- Use Logo as modifier when standalone, but Alt when started as child
 getModi :: IO WlrModifier
@@ -157,7 +168,9 @@ bindings modi =
     , (([modi], keysym_l), moveRight)
     , (([modi, Shift], keysym_k), modifyFocusedWS $ flip _moveFocusedLeft )
     , (([modi, Shift], keysym_j), modifyFocusedWS $ flip _moveFocusedRight)
-    , (([modi, Shift], keysym_h), setSubMap =<< makeListNavigation modi)
+    , (([modi, Shift], keysym_h), doJust getSeat $ \seat -> do
+            subMap <- makeListNavigation seat modi
+            setSeatKeybinds seat subMap)
     , (([modi], keysym_f), sendMessage ToggleFullM)
     , (([modi], keysym_m), sendMessage ToggleMirror)
     , (([modi], keysym_space), sendMessage NextLayout)
@@ -178,12 +191,10 @@ bindings modi =
     , (([modi, Shift], keysym_e), closeCompositor)
     ] ++ concatMap (\(sym, ws) -> [(([modi], sym), greedyView ws), (([modi, Shift], sym), sendTo ws), (([modi, Ctrl], sym), copyView ws)]) (zip wsSyms workspaces)
 
-myEventHook :: (FocusCore vs a, WSTag a) => SomeEvent -> Way vs a ()
-myEventHook = idleLog
-
 xReady :: Way vs Text ()
 xReady = do
     spawn "monky | dzen2 -x 1280 -w 1280"
+    spawn "background /usr/local/share/wallpapers"
     spawnOn "1" "qutebrowser" []
     spawnOn "2" "alacritty" ["-e", "glirc2"]
     spawnX11On "4" "firefox" []
@@ -193,14 +204,15 @@ myConf modi = WayUserConf
     { wayUserConfWorkspaces  = workspaces
     , wayUserConfLayouts     = sameLayout . avoidStruts . mkSmartBorders 2 . mkMirror . mkTFull $ (Tall 0.5 ||| TwoPane 0.5 ||| Spiral 0.618)
     , wayUserConfManagehook  = XWay.overrideXRedirect <> manageSpawnOn <> manageX11SpawnOn
-    , wayUserConfEventHook   = myEventHook
+    , wayUserConfEventHook   = idleDPMSHandler
     , wayUserConfKeybinds    = bindings modi
+    , wayUserConfPointerbinds = makeDefaultMappings modi
 
     , wayUserConfInputAdd    = \ptr -> do
         liftIO $ setupTrackball ptr
         attachDevice ptr "seat0"
     , wayUserConfDisplayHook =
-        [ getFuseBracket
+        [ getFuseBracket $ IPCGroup [("idle", Right idleIPC)]
         , getGammaBracket
         , getFilterBracket filterUser
         , baseTimeBracket
@@ -213,18 +225,20 @@ myConf modi = WayUserConf
                      , ("SDL_VIDEODRIVER", "wayland")
                      , ("CLUTTER_BACKEND", "wayland")
                      ]
+        , getIdleInihibitBracket
+        , getBackgroundBracket
         ]
-    , wayUserConfBackendHook = [getIdleBracket 3e5]
-    , wayUserConfPostHook    = [getScreenshooterBracket, Bracketed (const $ loadLogoBackground) (const $ pure ())]
+    , wayUserConfBackendHook = [getIdleBracket 6e5]
+    , wayUserConfPostHook    = [getScreenshooterBracket]
     , wayUserConfCoreHooks   = WayHooks
         { wayHooksVWSChange       = wsScaleHook <> (liftIO . hPrint stderr)
         , wayHooksOutputMapping   = enterLeaveHook <> handlePointerSwitch <> SM.mappingChangeEvt <> constStrutHandler [("DVI-D-1", Struts 20 0 0 0)] <> (liftIO . hPrint stderr)
         , wayHooksSeatWSChange    = SM.wsChangeLogHook <> handleKeyboardSwitch <> (liftIO . hPrint stderr)
-        , wayHooksSeatOutput      = SM.outputChangeEvt {-<> handleKeyboardPull-} <> (liftIO . hPrint stderr)
+        , wayHooksSeatOutput      = SM.outputChangeEvt <> handlePointerPull <> (liftIO . hPrint stderr)
         , wayHooksSeatFocusChange = focusFollowPointer <> (liftIO . hPrint stderr)
         , wayHooksNewOutput       = H.outputAddHook
         }
-    , wayUserConfShells = [Xdg.makeShell, Wl.makeShell, XWay.makeShellAct xReady]
+    , wayUserConfShells = [Xdg.makeShell, Xdgv6.makeShell, Wl.makeShell, XWay.makeShellAct xReady]
     , wayUserConfLog = pure ()
     , wayUserConfOutputAdd = \out -> do
         setPreferdMode (outputRoots out) $
