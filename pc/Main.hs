@@ -28,19 +28,17 @@ module Main
 where
 
 import Control.Applicative ((<|>))
-import Control.Monad (when, void)
 import Control.Monad.IO.Class (liftIO)
 import Data.IORef (readIORef)
 import Data.Monoid ((<>))
+import Data.Proxy
 import Data.Text (Text)
-import Foreign.Ptr (Ptr)
 import System.IO
-import System.Environment (lookupEnv, setEnv)
+import System.Environment (lookupEnv)
 
 import Text.XkbCommon.InternalTypes (Keysym(..))
 import Text.XkbCommon.KeysymList
-import Graphics.Wayland.WlRoots.Backend.Libinput (getDeviceHandle)
-import Graphics.Wayland.WlRoots.Input (InputDevice, getDeviceName)
+import Text.XkbCommon.Keymap (RMLVO (..))
 import Graphics.Wayland.WlRoots.Input.Keyboard (WlrModifier(..))
 import Graphics.Wayland.WlRoots.Render.Color (Color (..))
 
@@ -61,7 +59,9 @@ import Waymonad.IdleDPMS
 import Waymonad.IdleManager
 import Waymonad.Input (attachDevice)
 import Waymonad.Input.Cursor.Bindings (makeDefaultMappings)
+import Waymonad.Input.Libinput
 import Waymonad.Input.Seat (useClipboardText, setSeatKeybinds, resetSeatKeymap)
+import Waymonad.Layout (layoutOutput)
 import Waymonad.Layout.AvoidStruts
 import Waymonad.Layout.Choose
 import Waymonad.Layout.Mirror (mkMirror, ToggleMirror (..))
@@ -74,11 +74,11 @@ import Waymonad.Layout.TwoPane (TwoPane (..))
 import Waymonad.Navigation2D
 import Waymonad.Output (Output (outputRoots), addOutputToWork, setPreferdMode)
 import Waymonad.Protocols.GammaControl
+import Waymonad.Protocols.InputInhibit
 import Waymonad.Protocols.IdleInhibit
 import Waymonad.Protocols.Screenshooter
 import Waymonad.Protocols.Background
-import Waymonad.Start (Bracketed (..))
-import Waymonad.Types (SomeEvent, WayHooks (..), BindingMap)
+import Waymonad.Types (WayHooks (..), OutputEffective (..))
 import Waymonad.Types.Core (Seat (seatKeymap), WayKeyState (..), keystateAsInt)
 import Waymonad.Utility (sendMessage, focusNextOut, sendTo, closeCurrent, closeCompositor)
 import Waymonad.Utility.Base (doJust)
@@ -98,6 +98,7 @@ import qualified Waymonad.Shells.XWayland as XWay
 import qualified Waymonad.Shells.XdgShell as Xdg
 import qualified Waymonad.Shells.XdgShellv6 as Xdgv6
 import qualified Waymonad.Shells.WlShell as Wl
+import qualified Waymonad.Shells.Layers as Layer
 import qualified System.InputDevice as LI
 import qualified Waymonad.Shells.Pseudo.Multi as Multi
 import qualified Data.Text as T
@@ -106,13 +107,6 @@ import Waymonad.Main
 import "waymonad" Config
 
 import Graphics.Wayland.WlRoots.Util
-
-setupTrackball :: Ptr InputDevice -> IO ()
-setupTrackball dev = doJust (getDeviceHandle dev) $ \handle -> do
-    name <- getDeviceName dev
-    when ("Logitech USB Trackball" `T.isPrefixOf` name) $ do
-        void $ LI.setScrollMethod handle LI.ScrollOnButtonDown
-        void $ LI.setScrollButton handle 0x113
 
 wsSyms :: [Keysym]
 wsSyms =
@@ -141,7 +135,6 @@ makeListNavigation seat modi = do
             [ (([modi], keysym_j), modifyFocusedWS $ flip _moveFocusRight)
             , (([modi], keysym_k), modifyFocusedWS $ flip _moveFocusLeft )
             , (([modi, Shift], keysym_h), resetSeatKeymap seat)
-            , (([], keysym_Escape), resetSeatKeymap seat)
             ]
 
     pure $ \keystate -> case IM.lookup (keystateAsInt keystate) newMap of
@@ -193,7 +186,7 @@ bindings modi =
 
 xReady :: Way vs Text ()
 xReady = do
-    spawn "monky | dzen2 -x 1280 -w 1280"
+    spawn "monky | dzen2 -x 0 -w 1280"
     spawn "background /usr/local/share/wallpapers"
     spawnOn "1" "qutebrowser" []
     spawnOn "2" "alacritty" ["-e", "glirc2"]
@@ -209,10 +202,10 @@ myConf modi = WayUserConf
     , wayUserConfPointerbinds = makeDefaultMappings modi
 
     , wayUserConfInputAdd    = \ptr -> do
-        liftIO $ setupTrackball ptr
+        setLibinputOptions [LibinputOpts "Logitech USB Trackball" [ScrollMethod LI.ScrollOnButtonDown, ScrollButton 0x113]] ptr
         attachDevice ptr "seat0"
     , wayUserConfDisplayHook =
-        [ getFuseBracket $ IPCGroup [("idle", Right idleIPC)]
+        [ getFuseBracket $ IPCGroup [("idle", Right (idleIPC (Proxy :: Proxy IdleEvent)))]
         , getGammaBracket
         , getFilterBracket filterUser
         , baseTimeBracket
@@ -227,6 +220,7 @@ myConf modi = WayUserConf
                      ]
         , getIdleInihibitBracket
         , getBackgroundBracket
+        , getInputInhibitBracket
         ]
     , wayUserConfBackendHook = [getIdleBracket 6e5]
     , wayUserConfPostHook    = [getScreenshooterBracket]
@@ -237,8 +231,9 @@ myConf modi = WayUserConf
         , wayHooksSeatOutput      = SM.outputChangeEvt <> handlePointerPull <> (liftIO . hPrint stderr)
         , wayHooksSeatFocusChange = focusFollowPointer <> (liftIO . hPrint stderr)
         , wayHooksNewOutput       = H.outputAddHook
+        , wayHooksOutputEffective = layoutOutput . getChangedOutput <> const Layer.forceLayout
         }
-    , wayUserConfShells = [Xdg.makeShell, Xdgv6.makeShell, Wl.makeShell, XWay.makeShellAct xReady]
+    , wayUserConfShells = [Xdg.makeShell, Xdgv6.makeShell, Wl.makeShell, XWay.makeShellAct xReady, Layer.makeShell]
     , wayUserConfLog = pure ()
     , wayUserConfOutputAdd = \out -> do
         setPreferdMode (outputRoots out) $
@@ -247,13 +242,17 @@ myConf modi = WayUserConf
     , wayUserconfColor = Color 0.5 0 0 1
     , wayUserconfColors = mempty
     , wayUserconfFramerHandler = Nothing
+    , wayUserconfXKBMap = const RMLVO 
+        { rules = Nothing
+        , model = Nothing
+        , layout = Just "us,de"
+        , variant = Just "nodeadkeys"
+        , options = Just "grp:alt_space_toggle,caps:escape"
+        }
     }
 
 main :: IO ()
 main = do
-    setEnv "XKB_DEFAULT_LAYOUT" "us,de"
-    setEnv "XKB_DEFAULT_VARIANT" ",nodeadkeys"
-    setEnv "XKB_DEFAULT_OPTIONS" "grp:alt_space_toggle,caps:escape"
     setLogPrio Debug
     modi <- getModi
     confE <- loadConfig
