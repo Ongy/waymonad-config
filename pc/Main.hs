@@ -24,6 +24,7 @@ Reach us at https://github.com/ongy/waymonad
 {-# LANGUAGE NumDecimals #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE PackageImports #-}
+{-# LANGUAGE LambdaCase #-}
 module Main
 where
 
@@ -77,7 +78,6 @@ import Waymonad.Protocols.GammaControl
 import Waymonad.Protocols.InputInhibit
 import Waymonad.Protocols.IdleInhibit
 import Waymonad.Protocols.Screenshooter
-import Waymonad.Protocols.Background
 import Waymonad.Types (WayHooks (..), OutputEffective (..))
 import Waymonad.Types.Core (Seat (seatKeymap), WayKeyState (..), keystateAsInt)
 import Waymonad.Utility (sendMessage, focusNextOut, sendTo, closeCurrent, closeCompositor)
@@ -219,7 +219,6 @@ myConf modi = WayUserConf
                      , ("CLUTTER_BACKEND", "wayland")
                      ]
         , getIdleInihibitBracket
-        , getBackgroundBracket
         , getInputInhibitBracket
         ]
     , wayUserConfBackendHook = [getIdleBracket 6e5]
@@ -242,13 +241,21 @@ myConf modi = WayUserConf
     , wayUserconfColor = Color 0.5 0 0 1
     , wayUserconfColors = mempty
     , wayUserconfFramerHandler = Nothing
-    , wayUserconfXKBMap = const RMLVO 
-        { rules = Nothing
-        , model = Nothing
-        , layout = Just "us,de"
-        , variant = Just "nodeadkeys"
-        , options = Just "grp:alt_space_toggle,caps:escape"
-        }
+    , wayUserconfXKBMap = \case
+        "Ideazon Merc Stealth" -> RMLVO 
+            { rules = Nothing
+            , model = Nothing
+            , layout = Just "de"
+            , variant = Just ""
+            , options = Just "caps:escape"
+            }
+        _ ->  RMLVO 
+            { rules = Nothing
+            , model = Nothing
+            , layout = Just "us,de"
+            , variant = Just "nodeadkeys"
+            , options = Just "grp:alt_space_toggle,caps:escape"
+            }
     }
 
 main :: IO ()
