@@ -170,7 +170,7 @@ bindings modi =
     , (([modi], keysym_Left), sendMessage $ DecreaseRatio 0.1)
     , (([modi], keysym_Right), sendMessage $ IncreaseRatio 0.1)
 
-    , (([modi], keysym_Return), spawn "alacritty")
+    , (([modi], keysym_Return), spawn "konsole")
     , (([modi], keysym_d), spawn "rofi -show run")
     , (([modi], keysym_w), spawnVWatch)
     , (([modi], keysym_t), spawn "mpc toggle")
@@ -187,9 +187,8 @@ bindings modi =
 xReady :: Way vs Text ()
 xReady = do
     spawn "monky | dzen2 -x 0 -w 1280"
-    spawn "background /usr/local/share/wallpapers"
     spawnOn "1" "qutebrowser" []
-    spawnOn "2" "alacritty" ["-e", "glirc2"]
+    spawnOn "2" "konsole" ["-e", "glirc2"]
     spawnX11On "4" "firefox" []
 
 myConf :: WlrModifier -> WayUserConf (ViewSet Text) Text
@@ -209,10 +208,12 @@ myConf modi = WayUserConf
         , getGammaBracket
         , getFilterBracket filterUser
         , baseTimeBracket
-        , getStartupBracket (spawn "redshift -m wayland")
+        , getStartupBracket (spawn "redshift -m wayland" >> spawn "mako" >> spawn "background /usr/local/share/wallpapers")
         , envBracket [ ("PULSE_SERVER", "zelda.ongy")
                      , ("QT_QPA_PLATFORM", "wayland-egl")
                      , ("QT_WAYLAND_DISABLE_WINDOWDECORATION", "1")
+                     , ("QT_WAYLAND_FORCE_DPI", "96")
+                     , ("QUTE_SKIP_WAYLAND_CHECK", "1")
                      -- breaks firefox (on arch) :/
                      --, ("GDK_BACKEND", "wayland")
                      , ("SDL_VIDEODRIVER", "wayland")
