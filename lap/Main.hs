@@ -203,6 +203,7 @@ myConf modi = WayUserConf
     , wayUserConfPointerbinds = makeDefaultMappings modi
 
     , wayUserConfInputAdd    = \ptr -> do
+        setLibinputOptions [LibinputOpts "ETPS/2 Elantech Touchpad" [MiddleEmulation LI.MiddleEmulationEnabled, TapToClick LI.TapEnabled]] ptr
         attachDevice ptr "seat0"
     , wayUserConfDisplayHook =
         [ getFuseBracket $ IPCGroup [("idle", Right (idleIPC (Proxy :: Proxy IdleEvent)))]
